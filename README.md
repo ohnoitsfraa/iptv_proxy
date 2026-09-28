@@ -90,7 +90,7 @@ const guide = await hass.callApi('GET', 'iptv_proxy/epg?ids=1359,1356');
 
 ## Dashboard card
 
-This integration was built for the `tv-channels-card` of the HOME//OS dashboard. That card is registered separately, as a Lovelace resource. It shows:
+This integration was built for the **[TV Channels Card](https://github.com/ohnoitsfraa/tv-channels-card)**, which is also installable via HACS, as a custom repository of type *Dashboard*. It shows:
 - channel tiles grouped in tabs;
 - one HLS player;
 - the programme guide: what's on now on each tile, plus details and "coming up" below the player.
