@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "IPTV proxy",
+        "description": "Xtream Codes login. It stays on this Home Assistant; the dashboard only uses signed proxy URLs.",
+        "data": {
+          "host": "Server URL (e.g. http://line.example.net)",
+          "username": "Username",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the server.",
+      "invalid_auth": "Login rejected by the server."
+    },
+    "abort": {
+      "already_configured": "This account is already configured."
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "IPTV-proxy",
+        "description": "Xtream Codes-login. Die blijft op deze Home Assistant; het dashboard gebruikt alleen ondertekende proxy-adressen.",
+        "data": {
+          "host": "Server-adres (bv. http://line.example.net)",
+          "username": "Gebruikersnaam",
+          "password": "Wachtwoord"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Server niet bereikbaar.",
+      "invalid_auth": "Login geweigerd door de server."
+    },
+    "abort": {
+      "already_configured": "Dit account is al ingesteld."
+    }
+  }
+}
