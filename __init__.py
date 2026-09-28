@@ -6,8 +6,10 @@ the dashboard uses signed paths, and playlists are rewritten to signed proxy pat
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 import logging
+import time
 from urllib.parse import urlsplit
 
 from aiohttp import ClientError, ClientTimeout, web
@@ -19,6 +21,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import BASE, CONF_HOST, CONF_PASSWORD, CONF_USERNAME, DOMAIN, USER_AGENT
+from .epg import normalize_listings
 from .playlist import base_domain, host_allowed, rewrite_playlist
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,6 +29,8 @@ _LOGGER = logging.getLogger(__name__)
 KEY_REFRESH_TOKEN_ID = "hass_refresh_token_id"
 SEGMENT_SIGN_TTL = timedelta(minutes=15)
 HEADERS = {"User-Agent": USER_AGENT}
+EPG_TTL = {False: 300, True: 900}  # short (now/next) vs full-day guide, seconds
+EPG_MAX_IDS = 80
 
 
 class _State:
@@ -37,13 +42,15 @@ class _State:
         self.password = entry.data[CONF_PASSWORD]
         self.domain = base_domain(urlsplit(self.host).hostname or "")
         self.allowed_hosts: set[str] = {(urlsplit(self.host).hostname or "").lower()}
+        self.epg_cache: dict[tuple[str, bool], tuple[float, list]] = {}
+        self.epg_sem = asyncio.Semaphore(6)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the proxy from a config entry."""
     hass.data[DOMAIN] = _State(entry)
     if not hass.data.get(f"{DOMAIN}_views"):
-        for view in (LiveView(hass), PlaylistView(hass), SegmentView(hass), LogoView(hass)):
+        for view in (LiveView(hass), PlaylistView(hass), SegmentView(hass), LogoView(hass), EpgView(hass)):
             hass.http.register_view(view)
         hass.data[f"{DOMAIN}_views"] = True
     return True
@@ -177,3 +184,53 @@ class LogoView(_BaseView):
         if state is None or not host_allowed(url, set(), state.domain):
             return web.Response(status=403)
         return await self._passthrough(request, url, "private, max-age=86400")
+
+
+class EpgView(_BaseView):
+    """Programme guide: GET ?ids=1,2,3 -> {id: [{title, desc, start, end}, ...]}; add full=1 for a longer list."""
+
+    url = BASE + "/epg"
+    name = "api:iptv_proxy:epg"
+
+    async def get(self, request: web.Request) -> web.StreamResponse:
+        state = self.state
+        if state is None:
+            return web.Response(status=503, text="iptv_proxy not configured")
+        ids = [i for i in request.query.get("ids", "").split(",") if i.isdigit()][:EPG_MAX_IDS]
+        full = request.query.get("full") == "1"
+        now = time.time()
+
+        async def one(stream_id: str) -> tuple[str, list]:
+            key = (stream_id, full)
+            cached = state.epg_cache.get(key)
+            if cached is None or now - cached[0] > EPG_TTL[full]:
+                listings = await self._fetch(state, stream_id, full)
+                if listings is None:  # upstream failed: serve stale data if we have it
+                    listings = cached[1] if cached else []
+                else:
+                    state.epg_cache[key] = (now, listings)
+            else:
+                listings = cached[1]
+            return stream_id, normalize_listings(listings, now, limit=8 if full else 2)
+
+        results = await asyncio.gather(*(one(i) for i in ids))
+        return self.json(dict(results), headers={"Cache-Control": "private, max-age=60"})
+
+    async def _fetch(self, state: _State, stream_id: str, full: bool) -> list | None:
+        params = {"username": state.username, "password": state.password, "stream_id": stream_id}
+        params["action"] = "get_simple_data_table" if full else "get_short_epg"
+        if not full:
+            params["limit"] = "6"
+        session = async_get_clientsession(self.hass)
+        async with state.epg_sem:
+            try:
+                async with session.get(
+                    f"{state.host}/player_api.php", params=params, headers=HEADERS, timeout=ClientTimeout(total=20)
+                ) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json(content_type=None)
+            except (ClientError, TimeoutError, ValueError):
+                return None
+        listings = data.get("epg_listings") if isinstance(data, dict) else None
+        return listings if isinstance(listings, list) else []
