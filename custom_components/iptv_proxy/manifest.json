@@ -1,11 +1,12 @@
 {
   "domain": "iptv_proxy",
   "name": "IPTV Proxy (HOME//OS)",
-  "codeowners": [],
+  "codeowners": ["@ohnoitsfraa"],
   "config_flow": true,
   "dependencies": ["http"],
-  "documentation": "https://www.home-assistant.io/integrations/http/",
+  "documentation": "https://github.com/ohnoitsfraa/iptv_proxy",
   "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/ohnoitsfraa/iptv_proxy/issues",
   "requirements": [],
   "version": "1.1.0"
 }

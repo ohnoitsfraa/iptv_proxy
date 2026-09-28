@@ -29,30 +29,31 @@ Browser / HA app ──https──▶ Home Assistant ──http──▶ IPTV pr
 
 ## Installation
 
-1. Copy the files of this repository to `/config/custom_components/iptv_proxy/` on your Home Assistant, for example with the Studio Code Server or Filebrowser app, or over SSH/Samba:
+### Via HACS (recommended)
 
-   ```
-   /config/custom_components/iptv_proxy/
-   ├── __init__.py
-   ├── config_flow.py
-   ├── const.py
-   ├── epg.py
-   ├── manifest.json
-   ├── playlist.py
-   └── translations/
-       ├── en.json
-       └── nl.json
-   ```
+[![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ohnoitsfraa&repository=iptv_proxy&category=integration)
 
-2. Restart Home Assistant.
-3. Go to **Settings → Devices & services → Add integration**, search for **IPTV Proxy (HOME//OS)**, and enter:
-   - **Server URL**, for example `http://line.example.net` (include the port if your provider uses one)
-   - **Username**
-   - **Password**
+1. In HACS, open the **⋮** menu, choose **Custom repositories**, add `https://github.com/ohnoitsfraa/iptv_proxy` with type **Integration**, and click **Add**. The button above does the same in one click.
+2. Search for **IPTV Proxy (HOME//OS)** in HACS and click **Download**.
+3. Restart Home Assistant.
 
-   The login is verified against the provider (`player_api.php`) before the entry is created.
+New versions show up as an update in HACS (and under **Settings → Updates**) when a new GitHub release is published.
 
-**To update:** replace the files and restart Home Assistant. **To change the login:** remove the integration and add it again.
+### Manual
+
+Copy `custom_components/iptv_proxy/` from this repository to `/config/custom_components/iptv_proxy/` on your Home Assistant, then restart Home Assistant.
+
+### Setup
+
+Go to **Settings → Devices & services → Add integration**, search for **IPTV Proxy (HOME//OS)**, and enter:
+
+- **Server URL**, for example `http://line.example.net` (include the port if your provider uses one)
+- **Username**
+- **Password**
+
+The login is verified against the provider (`player_api.php`) before the entry is created.
+
+**To update:** install the new version via HACS (or replace the files) and restart Home Assistant. **To change the login:** remove the integration and add it again.
 
 ## Endpoints
 
@@ -122,7 +123,7 @@ channels:
 
 ## Development
 
-The playlist rewriting (`playlist.py`) and guide normalisation (`epg.py`) are pure Python without Home Assistant imports, so they can be unit-tested directly:
+The playlist rewriting (`custom_components/iptv_proxy/playlist.py`) and guide normalisation (`epg.py`) are pure Python without Home Assistant imports, so they can be unit-tested directly from that folder:
 
 ```python
 from epg import normalize_listings
