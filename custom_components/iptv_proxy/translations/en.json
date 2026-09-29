@@ -18,5 +18,21 @@
     "abort": {
       "already_configured": "This account is already configured."
     }
+  },
+  "services": {
+    "find_channels": {
+      "name": "Find channels",
+      "description": "Search the provider's live channels by name and return their stream ids, for use in the TV Channels Card.",
+      "fields": {
+        "query": {
+          "name": "Search",
+          "description": "Words that must all appear in the channel name or category, e.g. 'de zdf'."
+        },
+        "limit": {
+          "name": "Limit",
+          "description": "Maximum number of channels to return."
+        }
+      }
+    }
   }
 }

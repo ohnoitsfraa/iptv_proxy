@@ -18,5 +18,21 @@
     "abort": {
       "already_configured": "Dit account is al ingesteld."
     }
+  },
+  "services": {
+    "find_channels": {
+      "name": "Zenders zoeken",
+      "description": "Zoek live zenders van de provider op naam en geef hun stream-id's terug, voor gebruik in de TV Channels Card.",
+      "fields": {
+        "query": {
+          "name": "Zoekterm",
+          "description": "Woorden die allemaal in de zendernaam of categorie moeten voorkomen, bv. 'de zdf'."
+        },
+        "limit": {
+          "name": "Maximum",
+          "description": "Maximaal aantal zenders in het resultaat."
+        }
+      }
+    }
   }
 }

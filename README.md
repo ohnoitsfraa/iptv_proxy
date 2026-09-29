@@ -21,6 +21,8 @@ Browser / HA app ──https──▶ Home Assistant ──http──▶ IPTV pr
   - What's on now and next for many channels in one request, plus a longer list for the channel you're watching.
   - Base64 decoding and removal of duplicate or overlapping entries from merged guide sources.
   - Server-side caching (5 min / 15 min), with stale data served if the provider is unreachable.
+- **Search.** Find any of the provider's live channels by name, or search the programme guide of your own channels by title (and description).
+- **`iptv_proxy.find_channels` action.** Looks up stream ids by channel name, so you don't need the Xtream API or a separate IPTV app to build your channel list.
 
 ## Requirements
 
@@ -66,8 +68,17 @@ All endpoints live under `/api/iptv_proxy` and require Home Assistant authentica
 | `GET /seg?u=…` | Media segments, streamed through unchanged (signed by the proxy). |
 | `GET /logo?u=<logo url>` | Channel logos from the provider's domain, cached by the browser for 1 day. |
 | `GET /epg?ids=1,2,3[&full=1]` | Programme guide: `{ "<id>": [{ "title", "desc", "start", "end" }] }`. Up to 2 entries per channel, or 8 with `full=1`. Timestamps are Unix seconds. |
+| `GET /streams?q=zdf[&limit=30]` | Search the provider's live channels: `[{ "id", "name", "group", "logo" }]`. Every word must appear in the name or category. The channel list is cached for 6 hours; adult categories are left out. |
+| `GET /search?q=journaal&ids=1,2,3` | Search the full guide of the given channels (max 120): `[{ "id", "title", "desc", "start", "end", "live" }]`, title matches first, then what's on now. Without `q` it only warms the guide cache. |
 
-`stream_id` is the provider's numeric Xtream stream id. You can find ids with `player_api.php?…&action=get_live_streams`, or with any IPTV app that shows them.
+`stream_id` is the provider's numeric Xtream stream id. The easiest way to find ids is the `iptv_proxy.find_channels` action: in **Developer tools → Actions**, run it with for example `query: bbc news` and it returns matching channels with their `id`, `group` and `logo`. `player_api.php?…&action=get_live_streams`, or any IPTV app that shows ids, works too.
+
+```yaml
+action: iptv_proxy.find_channels
+data:
+  query: de zdf
+  limit: 10
+```
 
 ### Example: playing a channel from a custom card
 
