@@ -49,6 +49,7 @@ EPG_MAX_IDS = 80
 SEARCH_MAX_IDS = 120
 CATALOG_TTL = 6 * 3600  # provider channel list, seconds
 VOD_INFO_TTL = 3600
+LIBRARY_RETRY = 600  # after a failed film/series list download, seconds before trying again
 VOD_EXTENSIONS = {"mp4", "m4v", "mkv", "avi", "mov", "webm", "ts", "flv", "wmv", "mpg", "mpeg"}
 VOD_MIME = {"mp4": "video/mp4", "m4v": "video/mp4", "mov": "video/quicktime", "webm": "video/webm",
             "mkv": "video/x-matroska", "ts": "video/mp2t", "avi": "video/x-msvideo"}
@@ -80,7 +81,8 @@ class _State:
         self.catalog: tuple[float, list[dict]] | None = None
         self.catalog_lock = asyncio.Lock()
         self.library: dict[str, tuple[float, list[dict]]] = {}  # "movies" / "series"
-        self.library_lock = asyncio.Lock()
+        self.library_failed: dict[str, float] = {}
+        self.library_task: asyncio.Task | None = None
         self.vod_info: dict[tuple[str, str], tuple[float, dict]] = {}
 
     def vod_url(self, kind: str, stream_id: str, ext: str) -> str:
@@ -121,26 +123,56 @@ async def _player_api_large(hass: HomeAssistant, state: _State, params: dict) ->
         return None
 
 
-async def async_library(hass: HomeAssistant, state: _State) -> tuple[list[dict], list[dict]]:
-    """The provider's films and series, cached for a few hours; loaded on first use only."""
-    async with state.library_lock:
-        now = time.time()
-        if all(k in state.library and now - state.library[k][0] <= CATALOG_TTL for k in ("movies", "series")):
-            return state.library["movies"][1], state.library["series"][1]
-        vod, vod_cats, series, series_cats = await asyncio.gather(
+async def _load_library_kind(hass: HomeAssistant, state: _State, kind: str) -> None:
+    """Download and normalise one list ("movies" or "series"); keep the old one if the provider fails."""
+    if kind == "movies":
+        items, cats = await asyncio.gather(
             _player_api_large(hass, state, {"action": "get_vod_streams"}),
             _player_api(hass, state, {"action": "get_vod_categories"}),
+        )
+        normalize = normalize_vod
+    else:
+        items, cats = await asyncio.gather(
             _player_api_large(hass, state, {"action": "get_series"}),
             _player_api(hass, state, {"action": "get_series_categories"}),
         )
-        if isinstance(vod, list):
-            state.library["movies"] = (now, normalize_vod(vod, vod_cats if isinstance(vod_cats, list) else []))
-        if isinstance(series, list):
-            state.library["series"] = (now, normalize_series(series, series_cats if isinstance(series_cats, list) else []))
-        return (
-            state.library.get("movies", (0, []))[1],
-            state.library.get("series", (0, []))[1],
-        )
+        normalize = normalize_series
+    if not isinstance(items, list):
+        state.library_failed[kind] = time.time()
+        return
+    # tens of thousands of titles: normalising them must not block the event loop
+    result = await hass.async_add_executor_job(normalize, items, cats if isinstance(cats, list) else [])
+    state.library[kind] = (time.time(), result)
+    state.library_failed.pop(kind, None)
+
+
+def _library_due(state: _State, kind: str, now: float) -> bool:
+    if now - state.library_failed.get(kind, 0) < LIBRARY_RETRY:
+        return False
+    cached = state.library.get(kind)
+    return cached is None or now - cached[0] > CATALOG_TTL
+
+
+async def async_library(hass: HomeAssistant, state: _State, wait: bool = True) -> tuple[list[dict], list[dict]]:
+    """The provider's films and series.
+
+    Loaded on first use and refreshed in the background after CATALOG_TTL; all callers share one
+    download, and only the very first load (nothing cached yet) makes a caller wait.
+    """
+    now = time.time()
+    due = [k for k in ("movies", "series") if _library_due(state, k, now)]
+    if due and (state.library_task is None or state.library_task.done()):
+        async def load() -> None:
+            await asyncio.gather(*(_load_library_kind(hass, state, k) for k in due))
+
+        state.library_task = hass.async_create_background_task(load(), f"{DOMAIN} library")
+    task = state.library_task
+    if wait and task is not None and not task.done() and not all(k in state.library for k in ("movies", "series")):
+        await asyncio.shield(task)
+    return (
+        state.library.get("movies", (0, []))[1],
+        state.library.get("series", (0, []))[1],
+    )
 
 
 async def async_vod_info(hass: HomeAssistant, state: _State, kind: str, item_id: str) -> dict | None:
@@ -259,7 +291,9 @@ async def async_catalog(hass: HomeAssistant, state: _State) -> list[dict]:
         )
         if not isinstance(streams, list):
             return state.catalog[1] if state.catalog else []
-        catalog = normalize_streams(streams, categories if isinstance(categories, list) else [])
+        catalog = await hass.async_add_executor_job(
+            normalize_streams, streams, categories if isinstance(categories, list) else []
+        )
         state.catalog = (time.time(), catalog)
         return catalog
 
@@ -503,7 +537,7 @@ class StreamsView(_BaseView):
         except ValueError:
             limit = 30
         catalog = await async_catalog(self.hass, state)
-        return self.json(search_streams(catalog, request.query.get("q", ""), limit))
+        return self.json(await self.hass.async_add_executor_job(search_streams, catalog, request.query.get("q", ""), limit))
 
 
 class SearchView(_BaseView):
@@ -532,7 +566,7 @@ class SearchView(_BaseView):
 
 
 class LibraryView(_BaseView):
-    """Search films and series: GET ?q=matrix&limit=20 -> {movies: [...], series: [...]}."""
+    """Search films and series: GET ?q=matrix&limit=20 -> {movies: [...], series: [...]}; without q it only starts loading."""
 
     url = BASE + "/library"
     name = "api:iptv_proxy:library"
@@ -546,8 +580,15 @@ class LibraryView(_BaseView):
         except ValueError:
             limit = 20
         query = request.query.get("q", "")
+        if not query.strip():  # warm-up call when the search panel opens: start loading, don't wait
+            await async_library(self.hass, state, wait=False)
+            return self.json({"movies": [], "series": []})
         movies, series = await async_library(self.hass, state)
-        return self.json({"movies": search_streams(movies, query, limit), "series": search_streams(series, query, limit)})
+
+        def search() -> dict:
+            return {"movies": search_streams(movies, query, limit), "series": search_streams(series, query, limit)}
+
+        return self.json(await self.hass.async_add_executor_job(search))
 
 
 class VodInfoView(_BaseView):

@@ -72,7 +72,7 @@ All endpoints live under `/api/iptv_proxy` and require Home Assistant authentica
 | `GET /logo?u=<logo url>` | Channel logos from the provider's domain, cached by the browser for 1 day. |
 | `GET /epg?ids=1,2,3[&full=1]` | Programme guide: `{ "<id>": [{ "title", "desc", "start", "end" }] }`. Up to 2 entries per channel, or 8 with `full=1`. Timestamps are Unix seconds. |
 | `GET /streams?q=zdf[&limit=30]` | Search the provider's live channels: `[{ "id", "name", "group", "logo" }]`. Every word must appear in the name or category. The channel list is cached for 6 hours; adult categories are left out. |
-| `GET /library?q=matrix[&limit=20]` | Search films and series: `{ "movies": [{ "id", "name", "group", "logo", "ext", "year" }], "series": [{ "id", "name", "group", "logo", "year" }] }`. Both lists are loaded on first use (they can be large) and cached for 6 hours. |
+| `GET /library?q=matrix[&limit=20]` | Search films and series: `{ "movies": [{ "id", "name", "group", "logo", "ext", "year" }], "series": [{ "id", "name", "group", "logo", "year" }] }`. Both lists are loaded on first use (they can be large) and cached for 6 hours. Without `q` it only starts loading them in the background. |
 | `GET /movie/{id}` | Film details: `{ "name", "plot", "year", "minutes", "genre", "cover", "ext", "subtitles": [{ "lang", "url" }] }`. |
 | `GET /series/{id}` | Series details with `seasons: [{ "season", "episodes": [{ "id", "ep", "title", "plot", "minutes", "ext", "subtitles" }] }]`. |
 | `GET /vod/{movie\|episode}/{id}.m3u8` | HLS version of a film/episode, if the provider offers one (`502` otherwise). |
@@ -147,7 +147,7 @@ data:
 
 ## Limitations
 
-- **Films and series:** large libraries (tens of thousands of titles) take a few seconds and some memory to load on the first search. Seeking in a file opens a new upstream request; with a strict one-connection limit, very fast seeking can briefly fail.
+- **Films and series:** large libraries (tens of thousands of titles) take a few seconds and some memory to load. Loading starts when the search panel opens, runs in the background and is refreshed every 6 hours without making searches wait. Seeking in a file opens a new upstream request; with a strict one-connection limit, very fast seeking can briefly fail.
 - **Connection limit:** most Xtream accounts allow one concurrent connection. Watching on a second device, or switching channels very fast, can briefly return `upstream status 461/4xx`.
 - **Data use:** remote viewing goes through Nabu Casa, or through your own reverse proxy, at roughly 1–3 GB per hour depending on the channel.
 - **Latency:** playback runs 10–20 seconds behind live. That's normal for HLS and for the provider's own buffering.
