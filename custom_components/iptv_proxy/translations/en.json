@@ -33,6 +33,24 @@
           "description": "Maximum number of channels to return."
         }
       }
+    },
+    "inspect_vod": {
+      "name": "Inspect film or episode",
+      "description": "Shows what a film or episode really contains: the provider's details, whether an HLS version exists and, when ffprobe is available, its video, audio and subtitle tracks. Useful to see which subtitles can be shown.",
+      "fields": {
+        "kind": {
+          "name": "Kind",
+          "description": "movie or episode."
+        },
+        "id": {
+          "name": "Id",
+          "description": "Stream id of the film, or episode id of the episode."
+        },
+        "extension": {
+          "name": "Extension",
+          "description": "File extension (mkv, mp4, ...). Optional for films; for episodes use the extension from the series info."
+        }
+      }
     }
   }
 }

@@ -33,6 +33,24 @@
           "description": "Maximaal aantal zenders in het resultaat."
         }
       }
+    },
+    "inspect_vod": {
+      "name": "Film of aflevering inspecteren",
+      "description": "Toont wat een film of aflevering echt bevat: de gegevens van de provider, of er een HLS-versie is en, als ffprobe beschikbaar is, de video-, audio- en ondertitelsporen. Handig om te zien welke ondertitels getoond kunnen worden.",
+      "fields": {
+        "kind": {
+          "name": "Soort",
+          "description": "movie (film) of episode (aflevering)."
+        },
+        "id": {
+          "name": "Id",
+          "description": "Stream-id van de film, of aflevering-id van de aflevering."
+        },
+        "extension": {
+          "name": "Extensie",
+          "description": "Bestandsextensie (mkv, mp4, ...). Optioneel voor films; voor afleveringen de extensie uit de serie-info."
+        }
+      }
     }
   }
 }

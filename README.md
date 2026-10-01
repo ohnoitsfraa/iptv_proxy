@@ -22,6 +22,9 @@ Browser / HA app ──https──▶ Home Assistant ──http──▶ IPTV pr
   - Base64 decoding and removal of duplicate or overlapping entries from merged guide sources.
   - Server-side caching (5 min / 15 min), with stale data served if the provider is unreachable.
 - **Search.** Find any of the provider's live channels by name, or search the programme guide of your own channels by title (and description).
+- **Films and series.** Search the provider's films and series, get details and episode lists, and play them through the proxy: as HLS when the provider offers it, otherwise as the original file with seeking (HTTP Range) support.
+- **Subtitles.** HLS subtitle tracks pass through the proxy, and external subtitle files from the provider's info are converted from SRT to WebVTT.
+- **`iptv_proxy.inspect_vod` action.** Shows what a film or episode really contains (HLS availability and, via ffprobe, its video, audio and subtitle tracks).
 - **`iptv_proxy.find_channels` action.** Looks up stream ids by channel name, so you don't need the Xtream API or a separate IPTV app to build your channel list.
 
 ## Requirements
@@ -69,6 +72,12 @@ All endpoints live under `/api/iptv_proxy` and require Home Assistant authentica
 | `GET /logo?u=<logo url>` | Channel logos from the provider's domain, cached by the browser for 1 day. |
 | `GET /epg?ids=1,2,3[&full=1]` | Programme guide: `{ "<id>": [{ "title", "desc", "start", "end" }] }`. Up to 2 entries per channel, or 8 with `full=1`. Timestamps are Unix seconds. |
 | `GET /streams?q=zdf[&limit=30]` | Search the provider's live channels: `[{ "id", "name", "group", "logo" }]`. Every word must appear in the name or category. The channel list is cached for 6 hours; adult categories are left out. |
+| `GET /library?q=matrix[&limit=20]` | Search films and series: `{ "movies": [{ "id", "name", "group", "logo", "ext", "year" }], "series": [{ "id", "name", "group", "logo", "year" }] }`. Both lists are loaded on first use (they can be large) and cached for 6 hours. |
+| `GET /movie/{id}` | Film details: `{ "name", "plot", "year", "minutes", "genre", "cover", "ext", "subtitles": [{ "lang", "url" }] }`. |
+| `GET /series/{id}` | Series details with `seasons: [{ "season", "episodes": [{ "id", "ep", "title", "plot", "minutes", "ext", "subtitles" }] }]`. |
+| `GET /vod/{movie\|episode}/{id}.m3u8` | HLS version of a film/episode, if the provider offers one (`502` otherwise). |
+| `GET /vod/{movie\|episode}/{id}.{ext}` | The film/episode file, streamed unchanged; `Range` is forwarded so players can seek. |
+| `GET /sub?u=<subtitle url>` | An external subtitle file from the provider's info, as WebVTT. |
 | `GET /search?q=journaal&ids=1,2,3` | Search the full guide of the given channels (max 120): `[{ "id", "title", "desc", "start", "end", "live" }]`, title matches first, then what's on now. Without `q` it only warms the guide cache. |
 
 `stream_id` is the provider's numeric Xtream stream id. The easiest way to find ids is the `iptv_proxy.find_channels` action: in **Developer tools → Actions**, run it with for example `query: bbc news` and it returns matching channels with their `id`, `group` and `logo`. `player_api.php?…&action=get_live_streams`, or any IPTV app that shows ids, works too.
@@ -118,6 +127,17 @@ channels:
 
 `logo` may be the provider's original `http://` URL. The card loads it through `/logo`.
 
+### Subtitles: what works
+
+Browsers can only show subtitles they receive as WebVTT or as HLS subtitle tracks. So subtitles work when the provider offers an HLS version with subtitle tracks, lists separate subtitle files in its film info, or (in Safari) when an MP4 file carries text tracks. Subtitles embedded in MKV files can't be read by browsers; showing those would need server-side remuxing, which this integration doesn't do. Run `iptv_proxy.inspect_vod` on a film to see which case applies:
+
+```yaml
+action: iptv_proxy.inspect_vod
+data:
+  kind: movie
+  id: "123456"
+```
+
 ## Security notes
 
 - Credentials are only used between Home Assistant and the provider. The entry playlist URL, which contains the username and password, is never sent to the browser. Rewritten playlists do contain the provider's *segment* URLs as a signed `u=` parameter. With typical Xtream servers these are tokenised paths without credentials, but check this for your own provider if it matters to you.
@@ -127,6 +147,7 @@ channels:
 
 ## Limitations
 
+- **Films and series:** large libraries (tens of thousands of titles) take a few seconds and some memory to load on the first search. Seeking in a file opens a new upstream request; with a strict one-connection limit, very fast seeking can briefly fail.
 - **Connection limit:** most Xtream accounts allow one concurrent connection. Watching on a second device, or switching channels very fast, can briefly return `upstream status 461/4xx`.
 - **Data use:** remote viewing goes through Nabu Casa, or through your own reverse proxy, at roughly 1–3 GB per hour depending on the channel.
 - **Latency:** playback runs 10–20 seconds behind live. That's normal for HLS and for the provider's own buffering.

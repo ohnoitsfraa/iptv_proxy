@@ -12,3 +12,22 @@ find_channels:
           min: 1
           max: 100
           mode: box
+inspect_vod:
+  fields:
+    kind:
+      required: true
+      default: movie
+      selector:
+        select:
+          options:
+            - movie
+            - episode
+    id:
+      required: true
+      example: "123456"
+      selector:
+        text:
+    extension:
+      example: mkv
+      selector:
+        text:
