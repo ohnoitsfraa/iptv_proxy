@@ -31,3 +31,17 @@ inspect_vod:
       example: mkv
       selector:
         text:
+find_vod:
+  fields:
+    query:
+      required: true
+      example: "matrix"
+      selector:
+        text:
+    limit:
+      default: 20
+      selector:
+        number:
+          min: 1
+          max: 50
+          mode: box

@@ -51,6 +51,20 @@
           "description": "Bestandsextensie (mkv, mp4, ...). Optioneel voor films; voor afleveringen de extensie uit de serie-info."
         }
       }
+    },
+    "find_vod": {
+      "name": "Films en series zoeken",
+      "description": "Zoek films en series van de provider op naam en geef hun id's terug, voor gebruik met inspect_vod.",
+      "fields": {
+        "query": {
+          "name": "Zoekterm",
+          "description": "Woorden die allemaal in de titel of categorie moeten voorkomen."
+        },
+        "limit": {
+          "name": "Maximum",
+          "description": "Maximaal aantal films en series in het resultaat."
+        }
+      }
     }
   }
 }

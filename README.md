@@ -23,6 +23,7 @@ Browser / HA app ──https──▶ Home Assistant ──http──▶ IPTV pr
   - Server-side caching (5 min / 15 min), with stale data served if the provider is unreachable.
 - **Search.** Find any of the provider's live channels by name, or search the programme guide of your own channels by title (and description).
 - **Films and series.** Search the provider's films and series, get details and episode lists, and play them through the proxy: as HLS when the provider offers it, otherwise as the original file with seeking (HTTP Range) support.
+- **Audio browsers can't play.** Films with Dolby (AC3/E-AC3), DTS or TrueHD audio play silently in browsers. Those are remuxed on the fly with ffmpeg: video is copied untouched, only the audio is converted to AAC stereo, which costs a Raspberry Pi 4 little CPU. Multiple audio languages can be chosen.
 - **Subtitles.** HLS subtitle tracks pass through the proxy, and external subtitle files from the provider's info are converted from SRT to WebVTT.
 - **`iptv_proxy.inspect_vod` action.** Shows what a film or episode really contains (HLS availability and, via ffprobe, its video, audio and subtitle tracks).
 - **`iptv_proxy.find_channels` action.** Looks up stream ids by channel name, so you don't need the Xtream API or a separate IPTV app to build your channel list.
@@ -77,6 +78,8 @@ All endpoints live under `/api/iptv_proxy` and require Home Assistant authentica
 | `GET /series/{id}` | Series details with `seasons: [{ "season", "episodes": [{ "id", "ep", "title", "plot", "minutes", "ext", "subtitles" }] }]`. |
 | `GET /vod/{movie\|episode}/{id}.m3u8` | HLS version of a film/episode, if the provider offers one (`502` otherwise). |
 | `GET /vod/{movie\|episode}/{id}.{ext}` | The film/episode file, streamed unchanged; `Range` is forwarded so players can seek. |
+| `GET /vod/{movie\|episode}/{id}.probe?ext=mkv` | Tracks of a film/episode via ffprobe (cached 24 h): `{ "container", "seconds", "video", "audio": [{ "codec", "channels", "language", "title" }], "subtitles": [...], "browser_audio" }`. |
+| `GET /vod/{movie\|episode}/{id}.remux?ext=mkv&t=0&a=0` | The film/episode as fragmented MP4 with AAC stereo audio (video copied), starting at `t` seconds with audio track `a`. Not seekable by Range: request a new `t` to seek. One remux runs at a time. |
 | `GET /sub?u=<subtitle url>` | An external subtitle file from the provider's info, as WebVTT. |
 | `GET /search?q=journaal&ids=1,2,3` | Search the full guide of the given channels (max 120): `[{ "id", "title", "desc", "start", "end", "live" }]`, title matches first, then what's on now. Without `q` it only warms the guide cache. |
 
@@ -126,6 +129,14 @@ channels:
 ```
 
 `logo` may be the provider's original `http://` URL. The card loads it through `/logo`.
+
+### Finding film ids
+
+```yaml
+action: iptv_proxy.find_vod
+data:
+  query: matrix
+```
 
 ### Subtitles: what works
 

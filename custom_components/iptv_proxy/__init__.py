@@ -49,6 +49,9 @@ EPG_MAX_IDS = 80
 SEARCH_MAX_IDS = 120
 CATALOG_TTL = 6 * 3600  # provider channel list, seconds
 VOD_INFO_TTL = 3600
+PROBE_TTL = 24 * 3600
+# what browsers can decode; anything else is remuxed with the audio converted to AAC
+BROWSER_AUDIO = {"aac", "mp3", "opus", "vorbis", "flac"}
 LIBRARY_RETRY = 600  # after a failed film/series list download, seconds before trying again
 VOD_EXTENSIONS = {"mp4", "m4v", "mkv", "avi", "mov", "webm", "ts", "flv", "wmv", "mpg", "mpeg"}
 VOD_MIME = {"mp4": "video/mp4", "m4v": "video/mp4", "mov": "video/quicktime", "webm": "video/webm",
@@ -56,6 +59,11 @@ VOD_MIME = {"mp4": "video/mp4", "m4v": "video/mp4", "mov": "video/quicktime", "w
 VOD_PATH = {"movie": "movie", "episode": "series"}  # card kind -> Xtream path segment
 SERVICE_FIND_CHANNELS = "find_channels"
 SERVICE_INSPECT_VOD = "inspect_vod"
+SERVICE_FIND_VOD = "find_vod"
+FIND_VOD_SCHEMA = vol.Schema({
+    vol.Required("query"): cv.string,
+    vol.Optional("limit", default=20): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
+})
 INSPECT_VOD_SCHEMA = vol.Schema({
     vol.Required("kind"): vol.In(["movie", "episode"]),
     vol.Required("id"): vol.All(cv.string, vol.Match(r"^\d+$")),
@@ -84,6 +92,8 @@ class _State:
         self.library_failed: dict[str, float] = {}
         self.library_task: asyncio.Task | None = None
         self.vod_info: dict[tuple[str, str], tuple[float, dict]] = {}
+        self.probes: dict[tuple[str, str, str], tuple[float, dict]] = {}
+        self.remux_proc: asyncio.subprocess.Process | None = None
 
     def vod_url(self, kind: str, stream_id: str, ext: str) -> str:
         return f"{self.host}/{VOD_PATH[kind]}/{self.username}/{self.password}/{stream_id}.{ext}"
@@ -221,42 +231,58 @@ async def async_inspect_vod(hass: HomeAssistant, state: _State, kind: str, item_
     except (ClientError, TimeoutError):
         result["hls"] = {"available": False, "error": "unreachable"}
 
+    result["tracks"] = await async_probe(hass, state, kind, item_id, ext)
+    return result
+
+
+async def async_probe(hass: HomeAssistant, state: _State, kind: str, item_id: str, ext: str) -> dict:
+    """Container, duration and tracks of a film/episode via ffprobe; cached. {"error": ...} on failure."""
+    key = (kind, item_id, ext)
+    cached = state.probes.get(key)
+    if cached is not None and time.time() - cached[0] <= PROBE_TTL:
+        return cached[1]
     ffprobe = await hass.async_add_executor_job(shutil.which, "ffprobe")
     if not ffprobe:
-        result["tracks"] = {"error": "ffprobe not found on this system"}
-        return result
+        return {"error": "ffprobe not found on this system"}
     proc = await asyncio.create_subprocess_exec(
         ffprobe, "-v", "error", "-user_agent", USER_AGENT, "-show_entries",
         "stream=index,codec_type,codec_name,width,height,channels:stream_tags=language,title:format=format_name,duration",
         "-of", "json", state.vod_url(kind, item_id, ext),
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
     )
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=45)
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=45)
     except TimeoutError:
         proc.kill()
-        result["tracks"] = {"error": "ffprobe timed out"}
-        return result
+        return {"error": "ffprobe timed out"}
     if proc.returncode != 0:
-        # never echo ffprobe's stderr: it contains the stream URL with the login
-        result["tracks"] = {"error": f"ffprobe failed (exit {proc.returncode})"}
-        return result
+        # stderr is discarded on purpose: it would contain the stream URL with the login
+        return {"error": f"ffprobe failed (exit {proc.returncode})"}
     probe = json.loads(out or b"{}")
     fmt = probe.get("format", {})
-    result["tracks"] = {
+    streams = [
+        {
+            "type": st.get("codec_type"),
+            "codec": st.get("codec_name"),
+            **({"size": f"{st['width']}x{st['height']}"} if st.get("width") else {}),
+            **({"channels": st["channels"]} if st.get("channels") else {}),
+            **{k: v for k, v in (st.get("tags") or {}).items() if k in ("language", "title")},
+        }
+        for st in probe.get("streams", [])
+    ]
+    audio = [st for st in streams if st["type"] == "audio"]
+    video = next((st for st in streams if st["type"] == "video"), None)
+    result = {
         "container": fmt.get("format_name"),
+        "seconds": round(float(fmt.get("duration") or 0)),
         "minutes": round(float(fmt.get("duration") or 0) / 60),
-        "streams": [
-            {
-                "type": st.get("codec_type"),
-                "codec": st.get("codec_name"),
-                **({"size": f"{st['width']}x{st['height']}"} if st.get("width") else {}),
-                **({"channels": st["channels"]} if st.get("channels") else {}),
-                **{k: v for k, v in (st.get("tags") or {}).items() if k in ("language", "title")},
-            }
-            for st in probe.get("streams", [])
-        ],
+        "video": video["codec"] if video else None,
+        "audio": [{"codec": a["codec"], "channels": a.get("channels"), "language": a.get("language", ""), "title": a.get("title", "")} for a in audio],
+        "subtitles": [{"codec": st["codec"], "language": st.get("language", ""), "title": st.get("title", "")} for st in streams if st["type"] == "subtitle"],
+        "browser_audio": bool(audio) and audio[0]["codec"] in BROWSER_AUDIO,
+        "streams": streams,
     }
+    state.probes[key] = (time.time(), result)
     return result
 
 
@@ -305,7 +331,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         for view in (
             LiveView(hass), PlaylistView(hass), SegmentView(hass), LogoView(hass),
             EpgView(hass), StreamsView(hass), SearchView(hass),
-            LibraryView(hass), VodInfoView(hass), VodPlaylistView(hass), VodFileView(hass), SubtitleView(hass),
+            LibraryView(hass), VodInfoView(hass), VodPlaylistView(hass), VodProbeView(hass), VodRemuxView(hass),
+            VodFileView(hass), SubtitleView(hass),
         ):
             hass.http.register_view(view)
         hass.data[f"{DOMAIN}_views"] = True
@@ -333,6 +360,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_register(
             DOMAIN, SERVICE_INSPECT_VOD, inspect_vod,
             schema=INSPECT_VOD_SCHEMA, supports_response=SupportsResponse.ONLY,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_FIND_VOD):
+        async def find_vod(call: ServiceCall) -> ServiceResponse:
+            state = hass.data.get(DOMAIN)
+            if state is None:
+                raise HomeAssistantError("iptv_proxy is not configured")
+            movies, series = await async_library(hass, state)
+            q, n = call.data["query"], call.data["limit"]
+            return await hass.async_add_executor_job(
+                lambda: {"movies": search_streams(movies, q, n), "series": search_streams(series, q, n)}
+            )
+
+        hass.services.async_register(
+            DOMAIN, SERVICE_FIND_VOD, find_vod, schema=FIND_VOD_SCHEMA, supports_response=SupportsResponse.ONLY,
         )
     return True
 
@@ -618,6 +660,80 @@ class VodPlaylistView(_BaseView):
         if state is None:
             return web.Response(status=503, text="iptv_proxy not configured")
         return await self._playlist(request, state.vod_url(kind, item_id, "m3u8"))
+
+
+class VodProbeView(_BaseView):
+    """Tracks of a film/episode, so the player can tell whether the browser can decode it: GET .../{id}.probe?ext=mkv."""
+
+    url = BASE + "/vod/{kind:movie|episode}/{item_id:\\d+}.probe"
+    name = "api:iptv_proxy:vod_probe"
+
+    async def get(self, request: web.Request, kind: str, item_id: str) -> web.StreamResponse:
+        state = self.state
+        if state is None:
+            return web.Response(status=503, text="iptv_proxy not configured")
+        ext = request.query.get("ext", "mp4")
+        if ext not in VOD_EXTENSIONS:
+            return web.Response(status=404)
+        return self.json(await async_probe(self.hass, state, kind, item_id, ext))
+
+
+class VodRemuxView(_BaseView):
+    """A film/episode remuxed to fragmented MP4 with AAC stereo audio (video copied, not transcoded).
+
+    GET .../{id}.remux?ext=mkv&t=<start seconds>&a=<audio track index>. Not seekable by Range: the
+    player seeks by requesting a new start time. Only one remux runs at a time (provider connection limits).
+    """
+
+    url = BASE + "/vod/{kind:movie|episode}/{item_id:\\d+}.remux"
+    name = "api:iptv_proxy:vod_remux"
+
+    async def get(self, request: web.Request, kind: str, item_id: str) -> web.StreamResponse:
+        state = self.state
+        if state is None:
+            return web.Response(status=503, text="iptv_proxy not configured")
+        ext = request.query.get("ext", "mkv")
+        if ext not in VOD_EXTENSIONS:
+            return web.Response(status=404)
+        try:
+            start = max(0.0, float(request.query.get("t", "0")))
+            audio = max(0, int(request.query.get("a", "0")))
+        except ValueError:
+            return web.Response(status=400)
+        ffmpeg = await self.hass.async_add_executor_job(shutil.which, "ffmpeg")
+        if not ffmpeg:
+            return web.Response(status=501, text="ffmpeg not found on this system")
+        probe = await async_probe(self.hass, state, kind, item_id, ext)
+        tag = ["-tag:v", "hvc1"] if probe.get("video") == "hevc" else []  # Safari needs hvc1 for HEVC in MP4
+
+        if state.remux_proc and state.remux_proc.returncode is None:
+            state.remux_proc.kill()  # the previous remux (old position or old film) holds the provider connection
+            await state.remux_proc.wait()
+        proc = await asyncio.create_subprocess_exec(
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-user_agent", USER_AGENT,
+            "-ss", f"{start:.3f}", "-i", state.vod_url(kind, item_id, ext),
+            "-map", "0:v:0", "-map", f"0:a:{audio}?", "-c:v", "copy", *tag,
+            "-c:a", "aac", "-ac", "2", "-b:a", "192k", "-sn", "-dn",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        state.remux_proc = proc
+        resp = web.StreamResponse(status=200, headers={"Content-Type": "video/mp4", "Cache-Control": "no-cache"})
+        try:
+            first = await asyncio.wait_for(proc.stdout.read(256 * 1024), timeout=60)
+            if not first:
+                return web.Response(status=502, text="remux failed")
+            await resp.prepare(request)
+            await resp.write(first)
+            while chunk := await proc.stdout.read(256 * 1024):
+                await resp.write(chunk)
+        except (ConnectionResetError, TimeoutError):
+            pass  # viewer seeked, switched or closed the player
+        finally:
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+        return resp
 
 
 class VodFileView(_BaseView):

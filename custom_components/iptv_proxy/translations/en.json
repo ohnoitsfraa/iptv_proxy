@@ -51,6 +51,20 @@
           "description": "File extension (mkv, mp4, ...). Optional for films; for episodes use the extension from the series info."
         }
       }
+    },
+    "find_vod": {
+      "name": "Find films and series",
+      "description": "Search the provider's films and series by name and return their ids, for use with inspect_vod.",
+      "fields": {
+        "query": {
+          "name": "Search",
+          "description": "Words that must all appear in the title or category."
+        },
+        "limit": {
+          "name": "Limit",
+          "description": "Maximum number of films and of series to return."
+        }
+      }
     }
   }
 }
